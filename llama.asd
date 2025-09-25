@@ -1,10 +1,10 @@
 ;;; -*- Mode: LISP; Base: 10; Syntax: ANSI-Common-Lisp; Package: CL-USER -*-
 ;;; Copyright (c) 2023 Andrej
-;;; Copyright (c) 2024 Symbolics Pte Ltd
+;;; Copyright (c) 2024, 2025 Symbolics Pte Ltd
 ;;; SPDX-License-identifier: MIT
 
 (defsystem "llama"
-  :version "0.0.1"
+  :version "0.0.2"
   :license :MIT
   :author "Steve Nunez <steve@symbolics.tech>"
   :long-name   "Llama for Common Lisp"

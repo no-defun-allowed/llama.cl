@@ -11,11 +11,13 @@ Why? Two reasons:
 - Because Common Lisp is a fantastic language for experimentation, and this makes it easy to explore LLM techniques
 - To serve as a reference implementation for the Common Lisp community
 
+More than anything else it's the ease of AI experimentation, being able to mix expert systems, graphs, non-deterministic programming easily.
+
 ## How to run from emacs/slime/sly
 
 ### Prerequisites
 
-We assume you have a working emacs, lisp and slime/sly setup.  Most of the systems `llama` requires are in [quicklisp](https://www.quicklisp.org/beta/), however Quicklisp isn't in the greatest of health, and the systems haven't been updated since June 2023.  Therefore you'll need to get at least [binary-types](https://github.com/snunez1/binary-types) from the repository, and [LLA](https://github.com/Lisp-Stat/lla) if you want to use BLAS/LAPACK libraries for matrix multiplication.  Put them in a location accessible to Quicklisp, like `~/common-lisp`.
+We assume you have a working emacs, lisp and slime/sly setup.  Most of the systems `llama` requires are in [quicklisp](https://www.quicklisp.org/beta/), however [binary-types](https://github.com/snunez1/binary-types) is not in Quicklisp and you'll need to download it from the repository.  Put it in a location accessible to Quicklisp, like `~/common-lisp`.
 
 1. Get the models from Karpathy's repo [(original instructions](https://github.com/karpathy/llama2.c#feel-the-magic)) pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) the dataset.
 
@@ -42,11 +44,7 @@ If you want to use BLAS for matrix multiplication, you'll get about a 10X speed 
 
 Using LLA, the numbers are 14.4 tok/sec for CCL and 34.4 tok/sec for SBCL.
 
-## Usage notes
-
-dynamic variable binding
-lisp heap size
-etc
+Interestingly, the parallel version (see the `forward` function) is slower on the the stories15M dataset.  Likely the parallisation overhead outweighs the benefits in this case.  I got the best results with lparallel kernel equal to the number of physical cores on the machine.
 
 
 ## Original README.md

@@ -1,4 +1,4 @@
-;;; -*- Mode: LISP; Base: 10; Syntax: ANSI-Common-Lisp; Package: LLAMA2 -*-
+;;; -*- Mode: LISP; Base: 10; Syntax: ANSI-Common-Lisp; Package: LLAMA -*-
 ;;; Copyright (c) 2023 Andrej
 ;;; Copyright (c) 2024 Steve Nunez
 ;;; SPDX-License-identifier: MIT
@@ -51,20 +51,21 @@
 (defun make-state (config)
   "Allocate buffers for the run state
 We technically don't need to do this here, but it may help the compiler generate more efficient code"
-  (let+ (((&structure-r/o config- dim hidden-dim num-layers &ign &ign vocab-size sequence-len) config))
-	 ;; (kv-dim (/ (* dim num-kv-heads) num-heads))) ;this was in Karpathy's code
-    (make-run-state :x   (make-array dim :element-type 'short-float)
-		    :xb  (make-array dim :element-type 'short-float)
-		    :xb2 (make-array dim :element-type 'short-float)
-		    :hb  (make-array hidden-dim :element-type 'short-float)
-		    :hb2 (make-array hidden-dim :element-type 'short-float)
-		    :q (make-array dim :element-type 'short-float)
-		    :k (make-array dim :element-type 'short-float)
-		    :v (make-array dim :element-type 'short-float)
-		    :attention (make-array sequence-len :element-type 'short-float)
-		    :logits    (make-array vocab-size :element-type 'short-float)
-		    :key-cache (make-array `(,num-layers ,sequence-len ,dim) :element-type 'short-float)
-		    :value-cache (make-array `(,num-layers ,sequence-len ,dim) :element-type 'short-float))))
+  (let+ (((&structure-r/o config- dim hidden-dim num-layers num-heads num-kv-heads vocab-size sequence-len) config))
+    ;; (kv-dim (/ (* dim num-kv-heads) num-heads))) ;this was in Karpathy's code
+    (make-run-state :x   (aops:zeros dim 'short-float)
+		    :xb  (aops:zeros dim 'short-float)
+		    :xb2 (aops:zeros dim 'short-float)
+		    :hb  (aops:zeros hidden-dim 'short-float)
+		    :hb2 (aops:zeros hidden-dim 'short-float)
+		    :q (aops:zeros dim 'short-float)
+		    :k (aops:zeros dim 'short-float)
+		    :v (aops:zeros dim 'short-float)
+		    ;; :attention (aops:zeros sequence-len 'short-float)
+		    :attention (aops:zeros (* num-heads sequence-len) 'short-float)
+		    :logits    (aops:zeros vocab-size 'short-float)
+		    :key-cache (aops:zeros `(,num-layers ,sequence-len ,dim) 'short-float)
+		    :value-cache (aops:zeros `(,num-layers ,sequence-len ,dim) 'short-float))))
 
 (defun print-run-state (run-state stream depth)
   "RUN-STATE cannot be printed readably"
@@ -96,14 +97,14 @@ We technically don't need to do this here, but it may help the compiler generate
     (princ "" stream)))
 
 (defstruct (transformer (:print-function print-transformer))
-    config  ;the hyperparameters of the architecture (the blueprint)
-    weights ;the weights of the model
-    state   ;buffers for the "wave" of activations in the forward pass
+  config  ;the hyperparameters of the architecture (the blueprint)
+  weights ;the weights of the model
+  state   ;buffers for the "wave" of activations in the forward pass
 
-    ;; some more state needed to properly clean up the memory mapping
-    fd				 ;file descriptor for memory mapping
-    data			 ;memory mapped data pointer
-    file-size)			 ;size of the checkpoint file in bytes
+  ;; some more state needed to properly clean up the memory mapping
+  fd				 ;file descriptor for memory mapping
+  data			 ;memory mapped data pointer
+  file-size)			 ;size of the checkpoint file in bytes
 
 
 ;; TODO: consider LLA:CREATE-ARRAY-FROM-MEMORY and MMAP instead of BINARY-TYPES
@@ -121,7 +122,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	     (rms-att-weight (make-array num-layers))
 	     (rms-ffn-weight (make-array num-layers))
 
-	     ;use an array of 2D arrays so we can access by layer.  This differs from Karpathy's implementation.
+					;use an array of 2D arrays so we can access by layer.  This differs from Karpathy's implementation.
 	     (wq (make-array num-layers))
 	     (wk (make-array num-layers))
 	     (wv (make-array num-layers))
@@ -209,7 +210,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
 ;; a lot of room for improvement in the Common Lisp matrix multiplication.
 #-lla
 (defun mm (x y)
-  "Multiply vector X with matrix Y using Common Lisp"
+  "Multiply vector X with matrix Y"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3)))
   (declare (type (simple-array single-float 1) x))
   (etypecase y
@@ -219,8 +220,8 @@ Karpathy uses a custom format for these binary models.  There are three versions
     ((simple-array single-float 1) (reduce #'+ (map 'vector ; 3.6,3.8 tok/s (single thread)
 						    #'(lambda (x y)
 							(declare (type short-float x y))
-								 (* x y))
-							x y)))
+							(* x y))
+						    x y)))
     (simple-array (aops:each-index* 'single-float (i)
 		    (aops:sum-index j
 		      (* (aref X j) (aref Y i j)))))))
@@ -240,12 +241,15 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	  do (setf (aref x i) (exp (- (aref x i) max-val)))
 	  summing (aref x i) into s
 	  finally (setf sum s))
-    (e/ x sum)))
+    (let ((result (make-array size :element-type (array-element-type x))))
+      (loop for i below size
+            do (setf (aref result i) (/ (aref x i) sum)))
+      result)))
 
 
 (defun forward (token-index position &key (transformer *model*))
   (let+ (((&structure transformer- config weights state) transformer)
-	 ((&structure-r/o config- dim &ign num-layers num-heads num-kv-heads &ign &ign) config)
+	 ((&structure-r/o config- dim hidden-dim num-layers num-heads num-kv-heads vocab-size sequence-len) config)
 	 ((&structure run-state- x xb xb2 hb hb2 q k v attention logits key-cache value-cache) state)
 	 ((&structure transformer-weights-
 		      token-embedding-table rms-att-weight rms-ffn-weight wq wk wv wo w1 w2 w3 rms-final-weight wcls)
@@ -284,27 +288,36 @@ Karpathy uses a custom format for these binary models.  There are three versions
 		   (sub value-cache layer position) (copy-array v))
 
 	     ;; Multiquery attention, iterate over all heads
-	     ;; (lparallel:pdotimes (head num-heads) ; raises floating point errors
-	     (dotimes (head num-heads)	;TODO: make multi-threaded
-	       (loop for timestep upto position
-		     for sqrt-head-size = (sqrt head-size)
-		     for head-q = (subseq q (* head head-size) (* (1+ head) head-size))
-		     for head-k = (subseq
-				   (sub key-cache layer timestep) (* head head-size) (* (1+ head) head-size))
-		     do (setf (aref attention timestep) (/ (mm head-q head-k) sqrt-head-size)))
 
-	       (setf attention (softmax attention (1+ position)))
-
-	       ;; weighted sum of the values, store back into xb
-	       (let ((xb (partition xb (* head head-size) (* (1+ head) head-size))))
-		 (aops:each-index (i)
-		   (setf (aref xb i) 0.0))
+	     (lparallel:pdotimes (head num-heads :discard num-heads)
+	     ;; (dotimes (head num-heads)
+	       (let ((head-offset (* head sequence-len)))  ; Each head gets its own section of attention array
+		 ;; Calculate attention scores for this head's section
 		 (loop for timestep upto position
-		       for att = (aref attention timestep)
-		       for   v = (partition (sub value-cache layer timestep) (* head head-size) (* (1+ head) head-size))
-		       do (loop for i below head-size
-				do (incf (aref xb i) (* att (aref v i)))))))
+		       for sqrt-head-size = (sqrt head-size)
+		       for head-q = (subseq q (* head head-size) (* (1+ head) head-size))
+		       for head-k = (subseq
+				     (sub key-cache layer timestep) (* head head-size) (* (1+ head) head-size))
+		       do (setf (aref attention (+ head-offset timestep)) (/ (mm head-q head-k) sqrt-head-size)))
 
+		 ;; Create a displaced array view of just this head's attention section
+		 (let ((head-attention (aops:displace attention (1+ position) head-offset)))
+		   ;; Apply softmax to only this head's section
+		   (setf (subseq attention head-offset (+ head-offset (1+ position))) (softmax head-attention (1+ position))))
+
+		 ;; weighted sum of the values, store back into xb
+		 (let ((xb (partition xb (* head head-size) (* (1+ head) head-size))))
+		   (aops:each-index (i)
+		     (setf (aref xb i) 0.0))
+		   (loop for timestep upto position
+			 for att = (aref attention (+ head-offset timestep))
+			 for   v = (partition (sub value-cache layer timestep) (* head head-size) (* (1+ head) head-size))
+			 do (loop for i below head-size
+				  do (incf (aref xb i) (* att (aref v i))))))
+		 )			;let
+	       )			;dotimes
+
+	     ;; (format t "(head: ~A, position: ~A, aref w1 layer: ~A" "head" position (aref w1 layer))
 	     (setf xb2 (mm xb (aref wo layer)) ;final matmul to get the output of the attention
 		   x   (e+ x xb2)	       ;residual connection back into x
 		   xb  (rmsnorm x (aref rms-ffn-weight layer)) ;ffn rms norm
@@ -367,7 +380,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	     (if (= best-index -1) (return-from outer tokens))
 	     (setf (aref tokens best-index) best-id
 		   tokens (concatenate 'vector (subseq tokens 0 (1+ best-index))
-				               (subseq tokens (+ 2 best-index)))))))
+				       (subseq tokens (+ 2 best-index)))))))
 
 ;;; Sampler - greedy argmax, random, top-p, top-k
 ;;; Takes logits and returns a sampled token
@@ -377,7 +390,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
     (loop for i below (length logits)
 	  summing (aref logits i) into cdf
 	  if (< r cdf) return i
-	  finally (return (1- (length logits))))))
+	    finally (return (1- (length logits))))))
 
 (defun sort-scores (scores predicate)
   "Returns an array of CONS, (index . score), sorted by score)."
@@ -397,16 +410,16 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	 (r (random 1.0))
 	 (last-index))
 
-	(setf last-index (loop for i below (length probabilities)
-			       summing (cdr (aref probabilities i)) into cumulative-probability
-			       if (> cumulative-probability p) return i
-			       finally (return  (1- (length logits)))))
+    (setf last-index (loop for i below (length probabilities)
+			   summing (cdr (aref probabilities i)) into cumulative-probability
+			   if (> cumulative-probability p) return i
+			     finally (return  (1- (length logits)))))
 
-	;; Sample from our truncated sequence
-	(loop for i below (length (subseq probabilities 0 last-index))
-	      summing (cdr (aref probabilities i)) into cdf
-	      if (< r cdf) return (car (aref probabilities i))
-	      finally (return (car (aref probabilities last-index))))))
+    ;; Sample from our truncated sequence
+    (loop for i below (length (subseq probabilities 0 last-index))
+	  summing (cdr (aref probabilities i)) into cdf
+	  if (< r cdf) return (car (aref probabilities i))
+	    finally (return (car (aref probabilities last-index))))))
 
 
 (defun sample (logits temperature &key topp topk)
