@@ -34,7 +34,7 @@ We assume you have a working emacs, lisp and slime/sly setup.  Most of the syste
 7. Initalise the system with `(init #P"stories15M.bin" #P"tokenizer.bin" 32000)` (adjust paths if neccessary)
 8. Generate a story with: `(generate *model* *tokenizer*)`
 
-You can experiment with temperature, prompts and various samplers.  See code for all the options.
+You can experiment with temperature, prompts and various samplers.  See code for all the options.  Also tested and working with llama-2-7B.  You probably don't want to try anything larger unless you implement the CUDA kernels.
 
 ## Performance
 

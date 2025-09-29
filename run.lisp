@@ -1,6 +1,6 @@
 ;;; -*- Mode: LISP; Base: 10; Syntax: ANSI-Common-Lisp; Package: LLAMA -*-
 ;;; Copyright (c) 2023 Andrej
-;;; Copyright (c) 2024 Steve Nunez
+;;; Copyright (c) 2024, 2025 Steve Nunez
 ;;; SPDX-License-identifier: MIT
 (in-package #:llama)
 
@@ -18,7 +18,7 @@
   (num-layers   nil :binary-type u32)	;number of layers (of encoder/decoder blocks)
   (num-heads    nil :binary-type u32)	;number of query heads
   (num-kv-heads nil :binary-type u32)	;number of key/value heads
-  (vocab-size   nil :binary-type u32)	;vocabulary size, usually 256 (byte-level)
+  (vocab-size   nil :binary-type s32)	;vocabulary size, negative signals unshared weights
   (sequence-len nil :binary-type u32))	;max sequence length
 
 (defun print-weights (weights stream depth)
@@ -61,9 +61,8 @@ We technically don't need to do this here, but it may help the compiler generate
 		    :q (aops:zeros dim 'short-float)
 		    :k (aops:zeros dim 'short-float)
 		    :v (aops:zeros dim 'short-float)
-		    ;; :attention (aops:zeros sequence-len 'short-float)
 		    :attention (aops:zeros (* num-heads sequence-len) 'short-float)
-		    :logits    (aops:zeros vocab-size 'short-float)
+		    :logits    (aops:zeros (abs vocab-size) 'short-float)
 		    :key-cache (aops:zeros `(,num-layers ,sequence-len ,dim) 'short-float)
 		    :value-cache (aops:zeros `(,num-layers ,sequence-len ,dim) 'short-float))))
 
@@ -102,12 +101,12 @@ We technically don't need to do this here, but it may help the compiler generate
   state   ;buffers for the "wave" of activations in the forward pass
 
   ;; some more state needed to properly clean up the memory mapping
-  fd				 ;file descriptor for memory mapping
+  fd			 ;file descriptor for memory mapping
   data			 ;memory mapped data pointer
-  file-size)			 ;size of the checkpoint file in bytes
+  file-size)		 ;size of the checkpoint file in bytes
 
 
-;; TODO: consider LLA:CREATE-ARRAY-FROM-MEMORY and MMAP instead of BINARY-TYPES
+;; TODO: use LLA:CREATE-ARRAY-FROM-MEMORY and MMAP instead of BINARY-TYPES for the weights
 ;; Also see: https://stackoverflow.com/questions/78992480/binary-foreign-array-to-lisp-array
 (defun read-checkpoint (file)
   "Read model checkpoint from file and initialise global variables
@@ -116,13 +115,19 @@ Karpathy uses a custom format for these binary models.  There are three versions
   (let ((binary-types:*endian* :little-endian))
     (binary-types:with-binary-file (stream file :direction :input)
       (let+ ((config (read-binary 'config stream)) ;to return
-	     ((&structure-r/o config- dim hidden-dim num-layers num-heads &ign vocab-size sequence-len) config)
+	     ((&structure-r/o config- dim hidden-dim num-layers num-heads num-kv-heads vocab-size sequence-len) config)
 	     (head-size (/ dim num-heads))
-	     (token-embedding-table (make-array `(,vocab-size ,dim) :element-type 'short-float))
+	     (kv-dim (/ (* dim num-kv-heads) num-heads))
+
+	     ;; handle the negative vocab-size/shared weights kludge
+	     (shared-weights (when (> vocab-size 0) t))
+	     (vocabulary-size (abs vocab-size))
+
+	     (token-embedding-table (make-array `(,vocabulary-size ,dim) :element-type 'short-float))
 	     (rms-att-weight (make-array num-layers))
 	     (rms-ffn-weight (make-array num-layers))
 
-					;use an array of 2D arrays so we can access by layer.  This differs from Karpathy's implementation.
+	     ;use an array of 2D arrays so we can access by layer.  This differs from Karpathy's implementation.
 	     (wq (make-array num-layers))
 	     (wk (make-array num-layers))
 	     (wv (make-array num-layers))
@@ -132,27 +137,34 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	     (w3 (make-array num-layers))
 
 	     rms-final-weight
-	     (wcls (make-array vocab-size)))
+	     (wcls (make-array vocabulary-size)))
 
 	;; Note these are not in the same order as the structure definition
+	;; Below is what needs to be replaced by LLA:CREATE-ARRAY-FROM-MEMORY and MMAP
+	;; See run.c for computing the required offsets
 
 	(eval `(define-binary-vector token-vector f32 ,dim))
-	(eval `(define-binary-array token-array f32 '(,vocab-size ,dim)))
+	(eval `(define-binary-array token-array f32 '(,vocabulary-size ,dim)))
 	(setf token-embedding-table (read-binary 'token-array stream))
 
 	(eval `(define-binary-vector rms-weights f32 ,dim))
 	(loop for i from 0 below num-layers
 	      do (setf (aref rms-att-weight i) (read-binary 'rms-weights stream)))
 
-	(eval `(define-binary-array layer f32 '(,dim ,dim)))
+	;; Define separate array types for correct dimensions
+	(eval `(define-binary-array wq-layer f32 '(,dim ,dim)))           ; Query weights: (dim, dim)
+	(eval `(define-binary-array wk-layer f32 '(,dim ,kv-dim)))        ; Key weights: (dim, kv-dim)
+	(eval `(define-binary-array wv-layer f32 '(,dim ,kv-dim)))        ; Value weights: (dim, kv-dim)
+	(eval `(define-binary-array wo-layer f32 '(,dim ,dim)))           ; Output weights: (dim, dim)
+
 	(loop for i from 0 below num-layers
-	      do (setf (aref wq i) (read-binary 'layer stream)))
+	      do (setf (aref wq i) (read-binary 'wq-layer stream)))
 	(loop for i from 0 below num-layers
-	      do (setf (aref wk i) (read-binary 'layer stream)))
+	      do (setf (aref wk i) (read-binary 'wk-layer stream)))
 	(loop for i from 0 below num-layers
-	      do (setf (aref wv i) (read-binary 'layer stream)))
+	      do (setf (aref wv i) (read-binary 'wv-layer stream)))
 	(loop for i from 0 below num-layers
-	      do (setf (aref wo i) (read-binary 'layer stream)))
+	      do (setf (aref wo i) (read-binary 'wo-layer stream)))
 
 	;; weights for ffn
 	(eval `(define-binary-array w-1&3 f32 '(,hidden-dim ,dim)))
@@ -173,7 +185,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	(loop for i from 0 below (* sequence-len head-size)
 	      do (read-binary 'f32 stream))
 
-	(if (> vocab-size 0)
+	(if shared-weights
 	    (setf wcls token-embedding-table)
 	    (setf wcls (read-binary 'token-array stream)))
 
@@ -284,13 +296,13 @@ Karpathy uses a custom format for these binary models.  There are three versions
 				     (aref vec (1+ i)) (+ (* v0 fci) (* v1 fcr)))))
 
 	     ;; Save key and value at this timestep (position) in cache
-	     (setf (sub key-cache   layer position) (copy-array k)
-		   (sub value-cache layer position) (copy-array v))
+	     (setf (sub key-cache   layer position) k
+		   (sub value-cache layer position) v)
 
 	     ;; Multiquery attention, iterate over all heads
-
-	     (lparallel:pdotimes (head num-heads :discard num-heads)
-	     ;; (dotimes (head num-heads)
+	     ;; TODO: conditionalise this on :lparallel in *features*
+	     ;(lparallel:pdotimes (head num-heads :discard num-heads)
+	     (dotimes (head num-heads)
 	       (let ((head-offset (* head sequence-len)))  ; Each head gets its own section of attention array
 		 ;; Calculate attention scores for this head's section
 		 (loop for timestep upto position
@@ -313,11 +325,8 @@ Karpathy uses a custom format for these binary models.  There are three versions
 			 for att = (aref attention (+ head-offset timestep))
 			 for   v = (partition (sub value-cache layer timestep) (* head head-size) (* (1+ head) head-size))
 			 do (loop for i below head-size
-				  do (incf (aref xb i) (* att (aref v i))))))
-		 )			;let
-	       )			;dotimes
+				  do (incf (aref xb i) (* att (aref v i))))))))
 
-	     ;; (format t "(head: ~A, position: ~A, aref w1 layer: ~A" "head" position (aref w1 layer))
 	     (setf xb2 (mm xb (aref wo layer)) ;final matmul to get the output of the attention
 		   x   (e+ x xb2)	       ;residual connection back into x
 		   xb  (rmsnorm x (aref rms-ffn-weight layer)) ;ffn rms norm
@@ -330,7 +339,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
     ;; Layer loop ends above this line
 
     (setf x      (rmsnorm x rms-final-weight)    ;final rms norm
-	  logits (mm x token-embedding-table)))) ;classifier into logits
+	  logits (mm x wcls))))                  ;classifier into logits
 
 
 ;;; Tokenizer
@@ -434,9 +443,8 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	    (sample-topp logits topp)))))
 
 
-;;;
 ;;; User API below
-;;;
+
 (defun init (model-path tokenizer-path &optional vocabulary-size) ;TODO: default to files in the repo
   "Initialise the model and tokenizer"
   (let+ (((&values vocabulary scores max-token-length) (make-vocabulary tokenizer-path vocabulary-size)))
@@ -456,10 +464,10 @@ Karpathy uses a custom format for these binary models.  There are three versions
 				   prompt)
   (let+ (((&structure tokenizer- vocabulary vocabulary-scores vocabulary-size max-token-length) tokenizer)
 	 (token 1) next-token
-	 (prompt-tokens (encode prompt vocabulary vocabulary-scores))
+	 (prompt-tokens (if prompt
+			    (encode prompt vocabulary vocabulary-scores)
+			    (vector 1))) ;default to BOS token
 	 (start-time (get-internal-real-time)) end-time)
-
-    (unlessf prompt (aref vocabulary 1)) ;BoS
 
     (loop for position below steps
 	  for logits = (forward token position :transformer model)
