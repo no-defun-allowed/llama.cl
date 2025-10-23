@@ -36,15 +36,12 @@ We assume you have a working emacs, lisp and slime/sly setup.  Most of the syste
 
 You can experiment with temperature, prompts and various samplers.  See code for all the options.  Also tested and working with llama-2-7B.  You probably don't want to try anything larger unless you implement the CUDA kernels.
 
+
 ## Performance
 
-My machine is running a 3.5 GHz 6-core Intel i7 5930, 256K/15MB cache with 64GB DDR4 RAM and with the `stories15M` I get about 2.5 tok/sec with CCL and 3.7 tok/s with SBCL.
+My machine is running a 3.5 GHz 6-core Intel i7 5930, 256K/15MB cache with 64GB DDR4 RAM and with the `stories15M` I get about 20 tok/s with SBCL.
 
-If you want to use BLAS for matrix multiplication, you'll get about a 10X speed up.  Make sure that LLA is loaded _before_ you load `LLAMA`, if you do so it will automatically use the BLAS library.
-
-Using LLA, the numbers are 14.4 tok/sec for CCL and 34.4 tok/sec for SBCL.
-
-Interestingly, the parallel version (see the `forward` function) is slower on the the stories15M dataset.  Likely the parallisation overhead outweighs the benefits in this case.  I got the best results with lparallel kernel equal to the number of physical cores on the machine.
+Interestingly, the parallel version (see the `forward` function) is only marginally faster on the stories15M dataset.  Likely the parallisation overhead outweighs the benefits in this case.  I got the best results with lparallel kernel equal to the number of physical cores on the machine.
 
 
 ## Original README.md

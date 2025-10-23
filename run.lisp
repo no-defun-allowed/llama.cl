@@ -220,7 +220,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
 ;;   http://tkpapp.blogspot.com/2010/05/upgraded-array-element-types-and-pinned.html
 ;; for ways to optimise this, including SB-SIMD operations.  There is
 ;; a lot of room for improvement in the Common Lisp matrix multiplication.
-#-lla
+#+nil
 (defun mm (x y)
   "Multiply vector X with matrix Y"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3)))
@@ -239,24 +239,65 @@ Karpathy uses a custom format for these binary models.  There are three versions
 		      (* (aref X j) (aref Y i j)))))))
 
 
-(defparameter *rms-norm-eps* 1f-05	;1f-6 in Meta's llama2
-  "The epsilon used by the rms normalization layers")
+;;; Neural network blocks, the dynamics of the transformer
 
-(defun rmsnorm (x w)
+(defun vm! (a b c)
+  "Multiply vector A with matrix B and place results in C.
+Returns: C"
+  (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
+	   (type (simple-array single-float *) b)
+	   (type (simple-array single-float 1) a c))
+  (aops:each-index! c (i)
+    (aops:sum-index j
+      (* (aref a j) (aref b i j))))
+  c)
+
+(defun rmsnorm (x w c)
   "Return the RMS norm of X and scale by weights W"
-  (e* x w (/ (sqrt (+ (/ (sum (esquare x)) (length x)) *rms-norm-eps*)))))
+  (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
+	   (type (simple-array single-float *) w)
+	   (type (simple-array single-float 1) x c))
+  (let ((ss 0.0))				;sum of squares
+    (declare (type single-float ss))
+    (loop for x-elt :across x
+          summing (square x-elt) into s
+	  finally (setf ss s))
+    (setf ss (/ ss (length x))
+	  ss (+ ss 1e-5)
+	  ss (/ (the single-float (sqrt ss))))
+    (loop for i below (length x)
+	  do (setf (aref c i) (* (aref w i) (* ss (aref x i)))))
+    c))
 
 (defun softmax (x &optional (size (length x)))
   (let ((max-val (seq-max x))
-	sum)
+	(sum 0.0))
+    (declare (type single-float max-val sum))
     (loop for i below size
 	  do (setf (aref x i) (exp (- (aref x i) max-val)))
 	  summing (aref x i) into s
 	  finally (setf sum s))
-    (let ((result (make-array size :element-type (array-element-type x))))
-      (loop for i below size
-            do (setf (aref result i) (/ (aref x i) sum)))
-      result)))
+    (loop for i below size
+          do (setf (aref x i) (/ (aref x i) sum))))
+  x)
+
+(defun v+ (a b c)
+  "Destructive elementwise addition.  Results are placed in C"
+  (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
+	   (type (simple-array single-float 1) a b c))
+  (aops:each-index! c i
+    (+ (aref a i) (aref b i)))
+  c)
+
+(defun v* (a b c)
+  "Destructive elementwise multiplication.  Results are placed in C"
+  (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
+	   (type (simple-array single-float 1) a b c))
+  (aops:each-index! c i
+    (* (aref a i) (aref b i)))
+  c)
+
+
 
 
 (defun forward (token-index position &key (transformer *model*))
@@ -270,13 +311,14 @@ Karpathy uses a custom format for these binary models.  There are three versions
 	 ;; (kv-multiplier (/ num-heads num-kv-heads)) ;integer multiplier of the kv sharing in multiquery
 	 (head-size (/ dim num-heads)))
 
-    (setf x (aops:sub token-embedding-table token-index))
+    (replace x (aops:sub token-embedding-table token-index))
     (loop for layer below num-layers
-	  do (setf xb (rmsnorm x (aref rms-att-weight layer))
-	     	   ;; query, key and value matrix multiplications
-		   q (mm xb (aref wq layer))
-		   k (mm xb (aref wk layer))
-		   v (mm xb (aref wv layer)))
+	  do (rmsnorm x (aref rms-att-weight layer) xb)
+
+	     ;; query, key and value matrix multiplications
+	     (vm! xb (aref wq layer) q)
+	     (vm! xb (aref wk layer) k)
+	     (vm! xb (aref wv layer) v)
 
 	     ;; RoPE relative positional encoding. See: https://arxiv.org/abs/2104.09864
 	     ;; You'd think caching the frequency sin/cos vectors would be faster (HF does this), but apparently not:
@@ -301,7 +343,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
 
 	     ;; Multiquery attention, iterate over all heads
 	     ;; TODO: conditionalise this on :lparallel in *features*
-	     ;(lparallel:pdotimes (head num-heads :discard num-heads)
+	     ;; (lparallel:pdotimes (head num-heads :discard num-heads)
 	     (dotimes (head num-heads)
 	       (let ((head-offset (* head sequence-len)))  ; Each head gets its own section of attention array
 		 ;; Calculate attention scores for this head's section
@@ -310,7 +352,11 @@ Karpathy uses a custom format for these binary models.  There are three versions
 		       for head-q = (subseq q (* head head-size) (* (1+ head) head-size))
 		       for head-k = (subseq
 				     (sub key-cache layer timestep) (* head head-size) (* (1+ head) head-size))
-		       do (setf (aref attention (+ head-offset timestep)) (/ (mm head-q head-k) sqrt-head-size)))
+		       do (setf (aref attention (+ head-offset timestep)) (/ ;dot product
+									   (loop for q-elt :across head-q
+										 for k-elt :across head-k
+										 summing (* q-elt k-elt))
+									     sqrt-head-size)))
 
 		 ;; Create a displaced array view of just this head's attention section
 		 (let ((head-attention (aops:displace attention (1+ position) head-offset)))
@@ -327,19 +373,21 @@ Karpathy uses a custom format for these binary models.  There are three versions
 			 do (loop for i below head-size
 				  do (incf (aref xb i) (* att (aref v i))))))))
 
-	     (setf xb2 (mm xb (aref wo layer)) ;final matmul to get the output of the attention
-		   x   (e+ x xb2)	       ;residual connection back into x
-		   xb  (rmsnorm x (aref rms-ffn-weight layer)) ;ffn rms norm
-		   hb  (mm xb (aref w1 layer))
-		   hb2 (mm xb (aref w3 layer))
-		   hb  (e* hb (e/ (e* (e+ 1 (eexp (e- hb)))))) ;silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-		   hb  (e* hb hb2)			       ;elementwise multiply with w3(x)
-		   xb  (mm hb (aref w2 layer))		       ;final matmul to get the output of the ffn
-		   x   (e+ x xb)))			       ;residual connection
+	     (vm! xb (aref wo layer) xb2) ;final matmul to get the output of the attention
+	     (v+ x xb2 x)		  ;residual connection back into x
+	     (rmsnorm x (aref rms-ffn-weight layer) xb) ;ffn rms norm
+	     (vm! xb (aref w1 layer) hb)
+	     (vm! xb (aref w3 layer) hb2)
+	     (loop for i below hidden-dim
+		   for val = (aref hb i)
+		   do (setf (aref hb i) (* val (/ (1+ (exp (- val))))))) ;silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+	     (v* hb hb2 hb)			       ;elementwise multiply with w3(x)
+	     (vm! hb (aref w2 layer) xb)	       ;final matmul to get the output of the ffn
+	     (v+ x xb x))			       ;residual connection
     ;; Layer loop ends above this line
 
-    (setf x      (rmsnorm x rms-final-weight)    ;final rms norm
-	  logits (mm x wcls))))                  ;classifier into logits
+    (rmsnorm x rms-final-weight x)   ;final rms norm
+    (vm! x wcls logits)))            ;classifier into logits
 
 
 ;;; Tokenizer
@@ -362,7 +410,7 @@ Karpathy uses a custom format for these binary models.  There are three versions
     (mmap:with-mmap (addr fd size file)
       (setf max-token-length (cffi:mem-ref addr :int))
       (loop for i below vocabulary-size
-	    for ptr = (cffi:inc-pointer addr 4) then (cffi:inc-pointer ptr (+ 4 4 count))
+	    for ptr   = (cffi:inc-pointer addr 4) then (cffi:inc-pointer ptr (+ 4 4 count))
 	    for score = (cffi:mem-ref ptr :float)
 	    for count = (cffi:mem-ref ptr :int 4)
 	    for token = (cffi:foreign-string-to-lisp ptr :offset 8 :count count)
