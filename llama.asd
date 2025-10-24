@@ -4,7 +4,7 @@
 ;;; SPDX-License-identifier: MIT
 
 (defsystem "llama"
-  :version "0.0.4"
+  :version "0.0.5"
   :license :MIT
   :author "Steve Nunez <steve@symbolics.tech>"
   :long-name   "Llama for Common Lisp"
@@ -12,6 +12,11 @@
   :long-description "A port of Karparty's llama2 inference code to Common Lisp"
   :source-control (:git "https://github.com/snunez1/llama.cl.git")
   :bug-tracker "https://github.com/snunez1/llama.cl/issues"
-  :depends-on ("num-utils" "array-operations" "alexandria" "alexandria+" "let-plus" "binary-types" "mmap")
+  :depends-on ("num-utils"
+	       "array-operations"
+	       "alexandria"
+	       "alexandria+"
+	       "let-plus"
+	       "mmap")
   :components ((:file "pkgdcl")
 	       (:file "run" :depends-on ("pkgdcl"))))

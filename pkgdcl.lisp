@@ -4,11 +4,9 @@
 
 (uiop:define-package "LLAMA"
   (:use #:cl #:let-plus #:num-utils.elementwise)
-  (:import-from :binary-types #:define-binary-struct #:define-binary-vector #:define-binary-array
-		              #:read-binary #:u8 #:u32 #:f32 #:s32)
   (:import-from #:num-utils.arithmetic #:sum #:seq-max #:square)
   (:import-from #:alexandria #:copy-array)
   (:import-from #:array-operations #:partition #:sub #:argmax)
-  #+lla (:import-from #:lla #:mm)
+  #+lla (:import-from #:lla #:copy-array-from-memory #:create-array-from-memory)
   (:import-from #:alexandria+ #:unlessf)
   (:export #:read-checkpoint #:make-vocabulary #:generate))

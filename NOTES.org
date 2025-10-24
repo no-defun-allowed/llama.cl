@@ -1,0 +1,33 @@
+* RoPE
+According to the issues raised in Karpathy's llama.c repo, calculating
+sin & cos is just as fast as precomputing frequency vectors.
+HuggingFace and Meta's Python implementations all precompute the
+vector to be multiplied.  I left it as is because it's easier to
+understand. https://github.com/karpathy/llama2.c/issues/302
+
+Most of the Python implementations are horribly implemented, with 2-3 pages of boilerplate.
+
+There are two different ways to form pairs.  See the comments in the litgpt issue.
+
+Some relevant links:
+
+https://blog.eleuther.ai/rotary-embeddings/ <- looks to be the easiest to implement, other than Karpathy's.  Uses caching.
+https://nn.labml.ai/transformers/rope/index.html
+https://paperswithcode.com/paper/roformer-enhanced-transformer-with-rotary#code
+https://github.com/Lightning-AI/litgpt/issues/1214
+https://huggingface.co/transformers/v4.11.3/_modules/transformers/models/gptj/modeling_gptj.html
+https://medium.com/ai-insights-cobet/rotary-positional-embeddings-a-detailed-look-and-comprehensive-understanding-4ff66a874d83 <- not sure if correct?
+https://github.com/huggingface/transformers/blob/481a95781404e48b1c80940be17e8279dec82fe8/src/transformers/models/llama/modeling_llama.py#L160-L184
+
+* Getting Started
+
+#+BEGIN_SRC lisp
+  (swank:operate-on-system-for-emacs "llama" 'load-op)
+  (llama2:read-checkpoint #P"sstories15M.bin")
+  (llama2:transform 1 2)
+#+END_SRC
+
+Now compare that output with what is obtained from the Python version.
+
+* Optimising Loading Large Weight Matrices
+

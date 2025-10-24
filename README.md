@@ -1,50 +1,134 @@
-<p align="center">
-  <img src="assets/llama_cute.jpg" width="300" height="300" alt="Cute Llama">
-</p>
+# LLAMA.CL
 
-## llama.cl
+A Common Lisp implementation for Llama inference operations
 
-This is a Common Lisp port of Karpathy's [llama2.c](https://github.com/karpathy/llama2.c) to idiomatic Common Lisp.
+[Report Bug](https://github.com/snunez1/llama.cl/issues) · [Request Feature](https://github.com/snunez1/llama.cl/issues)
 
-Why? Two reasons:
+## Table of Contents
 
-- Because Common Lisp is a fantastic language for experimentation, and this makes it easy to explore LLM techniques
-- To serve as a reference implementation for the Common Lisp community
+1. About the Project
+   - Objectives
+   - Built With
+2. Getting Started
+   - Prerequisites
+   - Installation
+3. Usage
+4. Performance
+5. Roadmap
+6. Contributing
+7. License
+8. Contact
 
-More than anything else it's the ease of AI experimentation, being able to mix expert systems, graphs, non-deterministic programming easily.
+## About the Project
 
-## How to run from emacs/slime/sly
+LLAMA.CL is a Common Lisp implementation of Llama inference operations, designed for rapid experimentation, research, and as a reference implementation for the Common Lisp community. This project enables researchers and developers to explore LLM techniques within the Common Lisp ecosystem, leveraging the language's capabilities for interactive development and integration with symbolic AI systems.
+
+### Objectives
+
+- **Research-oriented interface**: Provide a platform for experimenting with LLM inference techniques in an interactive development environment.
+
+- **Reference implementation**: Serve as a canonical example of implementing modern neural network inference in Common Lisp.
+
+- **Integration capabilities**: Enable seamless combination with other AI paradigms available in Common Lisp, including expert systems, graph algorithms, and constraint-based programming.
+
+- **Simplicity and clarity**: Maintain readable, idiomatic Common Lisp code that prioritizes understanding over premature optimization.
+
+### Built With
+
+- [num-utils](https://github.com/Lisp-Stat/num-utils)
+- [array-operations](https://github.com/bendudson/array-operations)
+- [alexandria](https://gitlab.common-lisp.net/alexandria/alexandria)
+- [alexandria+](https://github.com/Symbolics/alexandria-plus)
+- [let-plus](https://github.com/sharplispers/let-plus)
+- [mmap](https://github.com/Shinmera/mmap)
+- [anaphora](https://github.com/tokenrove/anaphora)
+
+## Getting Started
 
 ### Prerequisites
 
-We assume you have a working emacs, lisp and slime/sly setup.  Most of the systems `llama` requires are in [quicklisp](https://www.quicklisp.org/beta/), however [binary-types](https://github.com/snunez1/binary-types) is not in Quicklisp and you'll need to download it from the repository.  Put it in a location accessible to Quicklisp, like `~/common-lisp`.
+LLAMA.CL requires:
+- A Common Lisp implementation (currently SBCL-only as of version 0.0.5; pull requests for other implementations are welcome)
+- Quicklisp or another ASDF-compatible system loader
+- Pre-trained model weights in binary format
 
-1. Get the models from Karpathy's repo [(original instructions](https://github.com/karpathy/llama2.c#feel-the-magic)) pretrained on [TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) the dataset.
+All dependencies are available through Quicklisp.
 
-    ```bash
-    wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin
-    wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories42M.bin
-    wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories110M.bin
-    ```
-2. Load the file `run.lisp` into an emacs buffer
-3. Load slime with `M-x slime`
-4. Load LLA with `(ql:quickload :lla)` (optional - requires setup)
-5. Load LLAMA with `(ql:quickload :llama)` from the REPL
-6. Move into the package `(in-package :llama)`
-7. Initalise the system with `(init #P"stories15M.bin" #P"tokenizer.bin" 32000)` (adjust paths if neccessary)
-8. Generate a story with: `(generate *model* *tokenizer*)`
+### Installation
 
-You can experiment with temperature, prompts and various samplers.  See code for all the options.  Also tested and working with llama-2-7B.  You probably don't want to try anything larger unless you implement the CUDA kernels.
+#### Getting the source
 
+1. Clone the repository to a location accessible to ASDF:
+   ```bash
+   cd ~/common-lisp
+   git clone https://github.com/snunez1/llama.cl.git
+   ```
+
+2. Clear the ASDF source registry to recognize the new system:
+   ```lisp
+   (asdf:clear-source-registry)
+   ```
+
+#### Obtaining model weights
+
+Download pre-trained models from [Karpathy's llama2.c repository](https://github.com/karpathy/llama2.c). For initial experimentation, the TinyStories models are recommended:
+
+```bash
+wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories15M.bin
+wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories42M.bin
+wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories110M.bin
+```
+
+#### Loading dependencies
+
+Use Quicklisp to obtain required dependencies:
+```lisp
+(ql:quickload :llama)
+```
+
+## Usage
+
+Initialize and generate text using the following workflow:
+
+```lisp
+;; Load the system
+(ql:quickload :llama)
+
+;; Switch to the LLAMA package
+(in-package :llama)
+
+;; Initialize with model and tokenizer
+(init #P"stories15M.bin" #P"tokenizer.bin" 32000)
+
+;; Generate text
+(generate *model* *tokenizer*)
+```
+
+The system supports various generation parameters including temperature control, custom prompts, and different sampling strategies. Consult the source code for detailed parameter specifications.
+
+The implementation has been validated with models up to llama-2-7B. Larger models may require additional optimization or hardware acceleration.
 
 ## Performance
 
-My machine is running a 3.5 GHz 6-core Intel i7 5930, 256K/15MB cache with 64GB DDR4 RAM and with the `stories15M` I get about 20 tok/s with SBCL.
+On a reference system (Intel i7-5930K, 3.5 GHz, 6 cores, 64GB DDR4), the stories15M model achieves approximately 20 tokens/second using SBCL.
 
-Interestingly, the parallel version (see the `forward` function) is only marginally faster on the stories15M dataset.  Likely the parallisation overhead outweighs the benefits in this case.  I got the best results with lparallel kernel equal to the number of physical cores on the machine.
+The current implementation includes experimental parallelization support. Performance characteristics vary based on model size and hardware configuration. For the stories15M model, parallelization overhead may exceed benefits on some systems.
 
+## Roadmap
 
-## Original README.md
+- Extend compatibility to additional Common Lisp implementations
+- Implement optimized matrix operations using BLAS and cuBLAS
+- Add support for quantized models
 
-For instructions on conversions to/from .bin format, training and other background, see the [original repo](https://github.com/karpathy/llama2.c)
+## Contributing
+
+Contributions are welcome. Please submit pull requests for bug fixes, performance improvements, or additional Common Lisp implementation support. See the project's issue tracker for current priorities.
+
+## License
+
+Distributed under the MIT License. See LICENSE for more information.
+
+## Contact
+
+Project Link: [https://github.com/snunez1/llama.cl](https://github.com/snunez1/llama.cl)
 
