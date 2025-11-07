@@ -4,7 +4,7 @@
 ;;; SPDX-License-identifier: MIT
 
 (defsystem "llama"
-  :version "0.0.5"
+  :version "0.0.6"
   :license :MIT
   :author "Steve Nunez <steve@symbolics.tech>"
   :long-name   "Llama for Common Lisp"
@@ -19,4 +19,7 @@
 	       "let-plus"
 	       "mmap")
   :components ((:file "pkgdcl")
-	       (:file "run" :depends-on ("pkgdcl"))))
+	       #-lla (:file "cl-math")
+	       #+lla (:file "lla-math")
+       	       (:file "run" :depends-on ("pkgdcl"))
+	       (:file "read-checkpoint")))

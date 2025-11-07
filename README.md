@@ -110,14 +110,16 @@ The implementation has been validated with models up to llama-2-7B. Larger model
 
 ## Performance
 
-On a reference system (Intel i7-5930K, 3.5 GHz, 6 cores, 64GB DDR4), the stories15M model achieves approximately 20 tokens/second using SBCL.
+### Lisp
 
-The current implementation includes experimental parallelization support. Performance characteristics vary based on model size and hardware configuration. For the stories15M model, parallelization overhead may exceed benefits on some systems.
+On a reference system Intel(R) Core(TM) Ultra 7 155H 16/22 cores, 32GB DDR4 RAM), the stories110M model achieves approximately 3 tokens/second using SBCL and common lisp along and 22 tokens/sec with SBCL+LLA with 9 threads for lparallel and 3 for MKL BLAS.
+
+Performance characteristics vary based on model size and hardware configuration. For the stories15M model, parallelization overhead may exceed benefits on some systems.  See the file benchmarks.md for benchmarking instructions.  You'll want to tune the lparallel and BLAS number of threads to find the sweet spot for you machine and model.
+
 
 ## Roadmap
 
 - Extend compatibility to additional Common Lisp implementations
-- Implement optimized matrix operations using BLAS and cuBLAS
 - Add support for quantized models
 
 ## Contributing

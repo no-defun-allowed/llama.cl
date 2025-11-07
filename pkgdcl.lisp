@@ -3,10 +3,10 @@
 ;;; SPDX-License-identifier: MIT
 
 (uiop:define-package "LLAMA"
-  (:use #:cl #:let-plus #:num-utils.elementwise)
-  (:import-from #:num-utils.arithmetic #:sum #:seq-max #:square)
-  (:import-from #:alexandria #:copy-array)
+  (:use #:cl #:let-plus)
+  (:import-from #:num-utils.arithmetic #:seq-max #:square)
   (:import-from #:array-operations #:partition #:sub #:argmax)
-  #+lla (:import-from #:lla #:copy-array-from-memory #:create-array-from-memory)
+  #+lla (:import-from #:lla #:copy-array-from-memory #:create-array-from-memory #:vm!)
+  ;; #+vml (:import-from #:vml #:v* #:v+)
   (:import-from #:alexandria+ #:unlessf)
   (:export #:read-checkpoint #:make-vocabulary #:generate))
