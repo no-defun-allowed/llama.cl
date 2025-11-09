@@ -175,9 +175,8 @@ We technically don't need to do this here, but it may help the compiler generate
 	     ;; https://arxiv.org/abs/2007.00072
 	     ;; (loop for head-group below (/ num-heads thread-count)
 	     ;; 	   do (process-head-group head-group))  ; Each thread handles multiple heads
-
-	     (lparallel:pdotimes (head num-heads nil num-heads)
-             ;; (dotimes (head num-heads)
+	     ;;(lparallel:pdotimes (head num-heads)
+             (dotimes (head num-heads)
 	       (let ((head-offset (* (the fixnum head) sequence-len))  ; Each head gets its own section of attention array
                      (start (* head head-size))
                      (end (* (1+ head) head-size)))
@@ -197,11 +196,9 @@ We technically don't need to do this here, but it may help the compiler generate
                  (fill xb 0.0 :start start :end end)
 		 (loop for timestep upto position
 		       for att = (aref attention (+ head-offset timestep))
-		       for   v = (partition (sub value-cache layer timestep) (* head head-size) (* (1+ head) head-size))
-		       do #+lla (lla:axpy! att v xb)
-		       #-lla
-			(loop for i below head-size
-			      do (incf (aref xb (+ start i)) (* att (aref value-cache layer timestep (+ start i))))))))
+		       do (loop for i below head-size
+			        do (incf (aref xb (+ start i))
+                                         (* att (aref value-cache layer timestep (+ start i))))))))
 
 	     (vm! xb (aref wo layer) xb2) ;final matmul to get the output of the attention
 	     (v+ x xb2 x)		  ;residual connection back into x
