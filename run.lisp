@@ -89,20 +89,20 @@ We technically don't need to do this here, but it may help the compiler generate
 
 (defstruct (run-state (:print-function print-run-state))
   "Current wave of activations"
-  x		;activation at current time stamp (dim,)
-  xb		;same, but inside a residual branch (dim,)
-  xb2		;an additional buffer just for convenience (dim,)
-  hb		;buffer for hidden dimension in the ffn (hidden_dim,)
-  hb2		;buffer for hidden dimension in the ffn (hidden_dim,)
-  q		;query (dim,)
-  k		;key (dim,)
-  v		;value (dim,)
-  attention	;buffer for scores/attention values (n_heads, seq_len)
+  (x nil :type (simple-array single-float 1))		;activation at current time stamp (dim,)
+  (xb nil :type (simple-array single-float 1))		;same, but inside a residual branch (dim,)
+  (xb2 nil :type (simple-array single-float 1))		;an additional buffer just for convenience (dim,)
+  (hb nil :type (simple-array single-float 1))		;buffer for hidden dimension in the ffn (hidden_dim,)
+  (hb2 nil :type (simple-array single-float 1))		;buffer for hidden dimension in the ffn (hidden_dim,)
+  (q nil :type (simple-array single-float 1))		;query (dim,)
+  (k nil :type (simple-array single-float 1))		;key (dim,)
+  (v nil :type (simple-array single-float 1))		;value (dim,)
+  (attention nil :type (simple-array single-float 1))	;buffer for scores/attention values (n_heads, seq_len)
   logits	;output logits
 
   ;; kv cache
-  key-cache	;(layer, seq_len, dim)
-  value-cache)	;(layer, seq_len, dim)
+  (key-cache nil :type (simple-array single-float 3))	;(layer, seq_len, dim)
+  (value-cache nil :type (simple-array single-float 3)))	;(layer, seq_len, dim)
 
 (defun print-transformer (transformer stream depth)
   "TRANSFORMER cannot be printed readably"
@@ -123,6 +123,7 @@ We technically don't need to do this here, but it may help the compiler generate
 
 
 (defun forward (token-index position &key (transformer *model*))
+  (declare (optimize speed))
   (let+ (((&structure transformer- config weights state) transformer)
 	 ((&structure-r/o config- dim hidden-dim num-layers num-heads num-kv-heads vocab-size sequence-len) config)
 	 ((&structure run-state- x xb xb2 hb hb2 q k v attention logits key-cache value-cache) state)
@@ -132,7 +133,8 @@ We technically don't need to do this here, but it may help the compiler generate
 	 (kv-dim (/ (* dim num-kv-heads) num-heads)) ;Multi Query Attention, see: https://arxiv.org/abs/1911.02150v1
 	 ;; (kv-multiplier (/ num-heads num-kv-heads)) ;integer multiplier of the kv sharing in multiquery
 	 (head-size (/ dim num-heads)))
-
+    (assert (integerp head-size))
+    (assert (integerp position))
     (replace x (aops:sub token-embedding-table token-index))
     (loop for layer below num-layers
 	  do (rmsnorm x (aref rms-att-weight layer) xb)
@@ -174,35 +176,32 @@ We technically don't need to do this here, but it may help the compiler generate
 	     ;; (loop for head-group below (/ num-heads thread-count)
 	     ;; 	   do (process-head-group head-group))  ; Each thread handles multiple heads
 
-	     (lparallel:pdotimes (head num-heads :discard num-heads)
-	     ;; (dotimes (head num-heads)
-	       (let ((head-offset (* head sequence-len)))  ; Each head gets its own section of attention array
+	     (lparallel:pdotimes (head num-heads nil num-heads)
+             ;; (dotimes (head num-heads)
+	       (let ((head-offset (* (the fixnum head) sequence-len))  ; Each head gets its own section of attention array
+                     (start (* head head-size))
+                     (end (* (1+ head) head-size)))
+                 (declare (fixnum start end))
 		 ;; Calculate attention scores for this head's section
 		 (loop for timestep upto position
 		       for sqrt-head-size = (sqrt head-size)
-		       for head-q = (subseq q (* head head-size) (* (1+ head) head-size))
-		       for head-k = (subseq
-				     (sub key-cache layer timestep) (* head head-size) (* (1+ head) head-size))
-		       do (setf (aref attention (+ head-offset timestep)) (/
-									   #-lla
-									   (loop for q-elt :across head-q
-										 for k-elt :across head-k
-										 summing (* q-elt k-elt))
-									   #+lla (lla:dot head-q head-k)
-									   sqrt-head-size)))
+		       do (setf (aref attention (+ head-offset timestep))
+                                (/ (loop for n from start below end
+                                         summing (* (aref q n) (aref key-cache layer timestep n))
+                                         of-type single-float)
+				   sqrt-head-size)))
 
 		 (softmax attention head-offset (+ head-offset position 1))
 
 		 ;; weighted sum of the values, store back into xb
-		 (let ((xb (partition xb (* head head-size) (* (1+ head) head-size))))
-		   (fill xb 0.0)
-		   (loop for timestep upto position
-			 for att = (aref attention (+ head-offset timestep))
-			 for   v = (partition (sub value-cache layer timestep) (* head head-size) (* (1+ head) head-size))
-			 do #+lla (lla:axpy! att v xb)
-			    #-lla
-			     (loop for i below head-size
-				   do (incf (aref xb i) (* att (aref v i))))))))
+                 (fill xb 0.0 :start start :end end)
+		 (loop for timestep upto position
+		       for att = (aref attention (+ head-offset timestep))
+		       for   v = (partition (sub value-cache layer timestep) (* head head-size) (* (1+ head) head-size))
+		       do #+lla (lla:axpy! att v xb)
+		       #-lla
+			(loop for i below head-size
+			      do (incf (aref xb (+ start i)) (* att (aref value-cache layer timestep (+ start i))))))))
 
 	     (vm! xb (aref wo layer) xb2) ;final matmul to get the output of the attention
 	     (v+ x xb2 x)		  ;residual connection back into x

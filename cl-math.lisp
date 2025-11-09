@@ -16,21 +16,26 @@
 
 ;;; Neural network blocks, the dynamics of the transformer
 
+(defmacro each-index! (vector index &body body)
+  `(dotimes (,index (length ,vector))
+     (setf (aref ,vector ,index) (progn ,@body))))
+
 (defun vm! (a b c)
   "Multiply vector A with matrix B and place results in C.
 Returns: C"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
-	   (type (simple-array single-float *) b)
+	   (type (simple-array single-float 2) b)
 	   (type (simple-array single-float 1) a c))
-  (aops:each-index! c (i)
-    (aops:sum-index j
-      (* (aref a j) (aref b i j))))
+  (each-index! c i
+    (let ((sum 0.0))
+      (dotimes (j (length a) sum)
+        (incf sum (* (aref a j) (aref b i j))))))
   c)
 
 (defun rmsnorm (x w c)
   "Return the RMS norm of X and scale by weights W"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
-	   (type (simple-array single-float *) w)
+	   (type (simple-array single-float 1) w)
 	   (type (simple-array single-float 1) x c))
   (let ((ss 0.0))				;sum of squares
     (declare (type single-float ss))
@@ -45,9 +50,12 @@ Returns: C"
     c))
 
 (defun softmax (x &optional (start 0) (end (length x)))
-  (let ((max-val (seq-max x))
+  (declare (optimize speed)
+           ((simple-array single-float 1) x))
+  (let ((max-val most-negative-single-float)
 	(sum 0.0))
     (declare (type single-float max-val sum))
+    (loop for e across x do (setf max-val (max max-val e)))
     (loop for i from start below end
 	  do (setf (aref x i) (exp (- (aref x i) max-val)))
 	  summing (aref x i) into s
@@ -60,7 +68,7 @@ Returns: C"
   "Destructive elementwise addition.  Results are placed in C"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
 	   (type (simple-array single-float 1) a b c))
-  (aops:each-index! c i
+  (each-index! c i
     (+ (aref a i) (aref b i)))
   c)
 
@@ -68,7 +76,7 @@ Returns: C"
   "Destructive elementwise multiplication.  Results are placed in C"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
 	   (type (simple-array single-float 1) a b c))
-  (aops:each-index! c i
+  (each-index! c i
     (* (aref a i) (aref b i)))
   c)
 
@@ -76,7 +84,7 @@ Returns: C"
   "Destructive elementwise division.  Results are placed in C"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
        (type (simple-array single-float 1) a b c))
-  (aops:each-index! c i
+  (each-index! c i
     (/ (aref a i) (aref b i)))
   c)
 
@@ -84,7 +92,7 @@ Returns: C"
   "Destructive elementwise subtraction.  Results are placed in C"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
        (type (simple-array single-float 1) a b c))
-  (aops:each-index! c i
+  (each-index! c i
     (- (aref a i) (aref b i)))
   c)
 
@@ -93,6 +101,6 @@ Returns: C"
   (declare (optimize (compilation-speed 0) (debug 0) (safety 0) (space 0) (speed 3))
        (type (simple-array single-float 1) x)
        (type single-float alpha))
-  (aops:each-index! x i
+  (each-index! x i
     (* (aref x i) alpha))
   x)
