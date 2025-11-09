@@ -13,13 +13,15 @@
   :source-control (:git "https://github.com/snunez1/llama.cl.git")
   :bug-tracker "https://github.com/snunez1/llama.cl/issues"
   :depends-on ("num-utils"
-	       "array-operations"
-	       "alexandria"
-	       "alexandria+"
-	       "let-plus"
-	       "mmap")
+               "array-operations"
+               "alexandria"
+               "alexandria+"
+               "let-plus"
+               "mmap"
+               "sb-simd")
   :components ((:file "pkgdcl")
 	       #-lla (:file "cl-math")
 	       #+lla (:file "lla-math")
-       	       (:file "run" :depends-on ("pkgdcl"))
-	       (:file "read-checkpoint")))
+               (:file "simd-math")
+               (:file "run" :depends-on ("pkgdcl"))
+               (:file "read-checkpoint")))
